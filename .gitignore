@@ -1,0 +1,102 @@
+# ============================================================================
+# FLUX Image Generator .gitignore
+# ============================================================================
+
+# Secrets and Environment Configuration
+# CRITICAL: Never commit API keys or tokens!
+config.env
+*.env
+!.env.example
+
+# Backup and Temporary Files
+*.backup
+*.old
+*.bak
+*~
+*.swp
+*.swo
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual Environments
+env/
+venv/
+.venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Logs and Debug Files
+logs/
+*.log
+debug.log
+error.log
+
+# Generated Images
+outputs/*.jpg
+outputs/*.png
+outputs/*.jpeg
+outputs/*.webp
+# Keep the outputs directory itself
+!outputs/.gitkeep
+
+# IDE and Editor Files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Operating System Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+# Testing and Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+*.cover
+.hypothesis/
+
+# Distribution / Packaging
+dist/
+build/
+*.egg-info/
+*.egg
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pyenv
+.python-version
+
+# MyPy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# Model Cache (optional - large files)
+# Uncomment if you don't want to track model downloads
+# .cache/
+# *.safetensors
+# *.bin
+
+# Custom local configuration
+# Allow users to customize config_defaults.yaml locally without committing
+# Uncomment if you want to gitignore local config customizations:
+# config_defaults.yaml

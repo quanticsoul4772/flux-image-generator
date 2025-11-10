@@ -1,0 +1,44 @@
+# ============================================================================
+# FLUX Image Generator - Python Dependencies
+# ============================================================================
+# Install with: pip install -r requirements.txt
+# For RunPod installation: pip install -r requirements.txt --no-cache-dir
+# ============================================================================
+
+# Core Dependencies
+# -----------------
+
+# PyTorch (GPU support - choose appropriate version for your CUDA)
+# For CUDA 12.1 (RunPod default):
+torch>=2.1.0
+# For CPU-only testing: torch>=2.1.0+cpu
+
+# HuggingFace Libraries
+diffusers>=0.27.0           # FLUX model pipeline
+transformers>=4.38.0        # CLIP tokenizer for prompt validation
+accelerate>=0.27.0          # Model loading and optimization
+safetensors>=0.4.0          # Safe model serialization
+
+# AI API Clients
+anthropic>=0.18.0           # Claude API for prompt enhancement
+
+# Configuration
+PyYAML>=6.0                 # YAML configuration file support
+
+# Image Processing
+Pillow>=10.0.0              # Image save/load operations
+
+# Optional Dependencies
+# ----------------------
+
+# For progress bars during model download/generation
+# tqdm>=4.65.0
+
+# For testing
+# pytest>=7.4.0
+# pytest-cov>=4.1.0
+
+# For development
+# black>=23.0.0             # Code formatting
+# ruff>=0.1.0               # Linting
+# mypy>=1.8.0               # Type checking

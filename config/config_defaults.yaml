@@ -1,0 +1,87 @@
+# FLUX Image Generator Configuration
+#
+# This file contains all configurable parameters with their default values.
+# These values can be customized by editing this file locally.
+#
+# Note: This file does NOT contain secrets (API keys, tokens).
+# Secrets should be placed in config.env (not committed to git).
+
+# RunPod Path Configuration
+paths:
+  workspace: "/workspace"                     # RunPod persistent volume mount point
+  cache: "/workspace/.cache"                  # General cache directory
+  venv: "/workspace/.venv"                    # Python virtual environment
+  scripts: "/workspace/scripts"               # Generation scripts location
+  outputs: "/workspace/outputs"               # Generated images output directory
+  hf_cache: "/workspace/.cache/huggingface"   # HuggingFace model cache (CRITICAL: must be on persistent volume)
+
+# Image Generation Parameters
+generation:
+  # Default resolution
+  height: 1024
+  width: 1024
+
+  # Quality presets (inference steps)
+  # More steps = higher quality but longer generation time
+  steps_fast: 4          # ~10-15 seconds - Quick draft quality
+  steps_balanced: 20     # ~30-45 seconds - Good quality (recommended)
+  steps_quality: 50      # ~1-2 minutes - Best quality
+
+  # Guidance scale presets
+  # Lower values = more artistic freedom, higher values = stricter prompt adherence
+  guidance_creative: 1.5   # Maximum artistic freedom
+  guidance_default: 3.5    # Balanced (recommended for most prompts)
+  guidance_strict: 5.0     # Strict prompt following
+  guidance_min: 1.0        # Absolute minimum (validation limit)
+  guidance_max: 7.0        # Absolute maximum (validation limit)
+
+  # Model configuration
+  model_id: "black-forest-labs/FLUX.1-dev"
+  torch_dtype: "bfloat16"  # Options: bfloat16 (recommended for 24GB VRAM), float16
+  max_sequence_length: 512 # FLUX model maximum token sequence length
+
+  # Output quality
+  jpeg_quality: 95         # JPEG compression quality (1-100, higher = better quality)
+
+  # Seed behavior
+  random_seed: true        # Use random seed for each generation (different results each time)
+  fixed_seed: 42           # Seed to use when random_seed is false (reproducible results)
+
+# Claude API Configuration
+claude:
+  model: "claude-sonnet-4-5-20250929"
+  max_tokens: 120          # Maximum tokens in enhanced prompt response
+  temperature: 0.7         # Creativity level (0.0-1.0, higher = more creative)
+  timeout: 30              # API request timeout in seconds
+
+  # System prompt (can be overridden by external file)
+  system_prompt: "FLUX.1 enhancer. Under 50 words: subject, mood, camera (vary!), lighting, 8k. Return ONLY prompt."
+
+  # External system prompt file (takes precedence if file exists)
+  system_prompt_file: "prompts/claude_system.txt"
+
+# HuggingFace API Configuration (fallback for prompt enhancement)
+huggingface:
+  model: "google/flan-t5-base"
+  timeout: 30              # API request timeout in seconds
+  max_length: 150          # Maximum output length
+  temperature: 0.7         # Creativity level
+  wait_for_model: true     # Wait if model is loading (vs immediate error)
+
+# CLIP Tokenizer Configuration
+clip:
+  model: "openai/clip-vit-large-patch14"
+  max_tokens: 77           # FLUX model hard limit (prompts truncated beyond this)
+
+  # Fallback word-to-token ratio when CLIP tokenizer unavailable
+  # Used to estimate token count from word count: tokens ≈ words × ratio
+  word_to_token_ratio: 1.6
+
+# SSH Connection Configuration
+ssh:
+  connect_timeout: 10                    # Connection timeout in seconds
+  strict_host_key_checking: "accept-new" # Options: "no", "accept-new", "yes"
+                                         # - "no": Never check (insecure, allows MITM)
+                                         # - "accept-new": Accept new hosts, verify known hosts (recommended)
+                                         # - "yes": Always verify (breaks with dynamic RunPod IPs)
+  compression: true                      # Enable SSH compression
