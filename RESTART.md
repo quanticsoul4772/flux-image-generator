@@ -72,5 +72,5 @@ bash flux-generate.sh "forest path" --quality --enhance-ai
 3. Model should already be cached - no download needed
 
 ## Cost
-- **While running**: ~$0.50/hour (RTX 4090)
+- **While running**: ~$1.89/hour (A100 80GB)
 - **While stopped**: $5/month (50GB storage only)

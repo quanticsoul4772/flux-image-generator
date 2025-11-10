@@ -203,8 +203,8 @@ STEPS=${STEPS_QUALITY}  # 50
 ### VRAM Management
 - FLUX.1-dev requires >24GB VRAM in bfloat16
 - `generate.py` uses `pipe.enable_model_cpu_offload()` to manage memory
-- **Never disable CPU offload** - will OOM on RTX 4090 (24GB)
-- Higher steps (50+) push VRAM limits - reduce if OOM
+- With A100 80GB, VRAM is not a constraint for standard generations
+- Higher steps (50+) still benefit from CPU offload for memory efficiency
 
 ### Disk Space Management
 - Container disk: Only 10GB - don't write large files
@@ -280,6 +280,6 @@ ssh root@${RUNPOD_HOST} -p ${RUNPOD_PORT} -i ${SSH_KEY} "ls -lh /workspace/.cach
 - SSH keys: `chmod 600 ~/.ssh/id_ed25519`
 
 ### Cost Optimization
-- RunPod: ~$0.50/hour (RTX 4090) + $5/month (50GB storage)
+- RunPod: ~$1.89/hour (A100 80GB) + $5/month (50GB storage)
 - Stop pod when idle (storage persists)
 - Use `--fast` (4 steps) for quick iterations

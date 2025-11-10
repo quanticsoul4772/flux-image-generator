@@ -104,8 +104,8 @@ OUTPUT_DIR_WINDOWS=C:\Users\${WINDOWS_USERNAME}\Pictures\FLUX
 ### 3. Setup RunPod (First Time)
 
 1. **Deploy Pod**:
-   - Template: RunPod Pytorch 2.4.0
-   - GPU: RTX 4090 (24GB VRAM)
+   - Template: `runpod/pytorch:2.1.1-py3.10-cuda12.1.1-devel-ubuntu22.04`
+   - GPU: A100 80GB (or 24GB+ VRAM)
    - Network Volume: 50GB ($5/month)
    - Mount path: `/workspace`
 
@@ -210,9 +210,9 @@ See [CONFIGURATION.md](CONFIGURATION.md) for detailed configuration options.
 
 ## Costs
 
-- **Compute**: ~$0.50/hour (RTX 4090 on-demand)
+- **Compute**: ~$1.89/hour (A100 80GB on-demand)
 - **Storage**: $5/month (50GB network volume)
-- **Typical session**: 1-2 hours = ~$1
+- **Typical session**: 1-2 hours = ~$3-4
 
 ## Output
 
