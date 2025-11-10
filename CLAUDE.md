@@ -4,186 +4,282 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Commands
 
-### Image Generation
-- **Main generation script**: `bash flux-generate.sh "prompt" [flags]`
-  - Quality presets: `--fast` (4 steps), `--balanced` (20 steps), `--quality` (50 steps)
-  - Resolution presets: `--square`, `--portrait`, `--landscape`, `--hd`, `--4k`, `--custom WxH`
-  - Seed control: `--seed N` (reproducible), `--random-seed` (default)
-  - Guidance scale: `--creative` (1.5), `--guidance X` (1.0-7.0), `--strict` (5.0)
-  - JPEG quality: `--jpeg-quality N` (1-100, default 95)
-  - Prompt enhancement: `--enhance-ai` (uses Claude API)
-  - Help: `--help` for full documentation
-  - Examples:
-    - `bash flux-generate.sh "sunset over mountains" --quality --enhance-ai --creative`
-    - `bash flux-generate.sh "portrait" --portrait --seed 12345 --balanced`
-    - `bash flux-generate.sh "logo" --custom 512x512 --fast`
+### Development Commands
+```bash
+# Main generation workflow
+bash flux-generate.sh "prompt" [--quality|--balanced|--fast] [--enhance-ai] [--portrait|--landscape|--4k]
 
-### RunPod Deployment
-- **Upload generation script**: `bash upload-script.sh`
-- **Initial setup**: `bash scripts/deploy.sh` (creates venv, installs dependencies, downloads FLUX model)
-- **Test generation**: `bash scripts/generate.sh "test prompt"`
+# Update RunPod connection after pod restart (auto-fetches new IP/port)
+bash scripts/update-pod-connection.sh
 
-### Testing
-- **CLIP token validation**: `python3 test-clip.py "prompt text"`
-- **Prompt enhancement test**: `python3 test-enhance-verbose.py "prompt"`
-- **HuggingFace model test**: `python3 test-hf-models.py`
+# Upload modified scripts to RunPod
+bash scripts/upload-script.sh
 
-### Configuration
-- **Secrets**: `config.env` (API keys, RunPod connection) - NOT in git
-  - Template: `.env.example`
-  - Contains: ANTHROPIC_API_KEY, HUGGINGFACE_TOKEN, RUNPOD_HOST, RUNPOD_PORT, SSH_KEY, OUTPUT_DIR_WSL, OUTPUT_DIR_WINDOWS
-- **Python config**: `config_defaults.yaml` (quality presets, resolution defaults, timeouts)
-  - Loaded by `config.py` dataclass system
-  - Override via environment variables or CLI flags
-- **Shell config**: `lib/config.sh` (RunPod paths, SSH settings, quality presets)
-  - Sourced by all shell scripts
-  - Provides helper functions: `ssh_cmd()`, `scp_cmd()`, `parse_resolution()`
-- **Logging**: `logger.py` (centralized logging for Python scripts)
-  - Console output: INFO level with colors
-  - File output: DEBUG level in `logs/` directory
-- **View current config**: `python3 config.py` or `bash lib/config.sh`
+# Direct RunPod SSH access
+ssh root@${RUNPOD_HOST} -p ${RUNPOD_PORT} -i ${SSH_KEY}
+
+# View current configuration
+python3 config/config.py
+
+# Test prompt enhancement directly
+python3 src/enhance-prompt-claude.py "test prompt"
+```
+
+### RunPod Direct Commands
+```bash
+# Check disk usage on network volume
+ssh root@${RUNPOD_HOST} -p ${RUNPOD_PORT} -i ${SSH_KEY} "df -h /workspace"
+
+# Manually run generation on RunPod
+ssh root@${RUNPOD_HOST} -p ${RUNPOD_PORT} -i ${SSH_KEY} \
+  "cd /workspace && source .venv/bin/activate && python3 scripts/generate.py 'prompt' 'output.jpg' 20"
+```
 
 ## Architecture
 
-### Execution Flow
-1. **Local (WSL)**: `flux-generate.sh` reads config.env and parses CLI flags
-2. **Prompt Enhancement** (optional): `enhance-prompt-claude.py` calls Claude Sonnet 4.5 API to expand short prompts
-3. **CLIP Validation**: Enhanced prompts are trimmed to 77 CLIP tokens (FLUX model limit)
-4. **Remote Execution**: SSH to RunPod pod, execute `generate.py` with venv activated
-5. **Image Generation**: FLUX.1-dev model runs with CPU offloading (24GB VRAM optimization)
-6. **Download**: SCP transfers image from RunPod to local WSL and Windows directories
-7. **Display**: PowerShell auto-opens image in Windows default viewer
+### Hybrid Execution Model (WSL + RunPod)
 
-### Key Components
+This project uses a **split execution architecture**:
 
-**Generation Pipeline** (`generate.py`):
-- Loads FLUX.1-dev model from HuggingFace (config.generation.model_id)
-- Uses argparse for CLI argument parsing
-- Configurable parameters:
-  - Resolution: `--height`, `--width` (default from config)
-  - Seed: `--seed N` or random (config.generation.random_seed)
-  - JPEG quality: `--quality` (default 95)
-  - CPU offloading: `--cpu-offload` (default enabled) / `--no-cpu-offload`
-- Uses `torch.bfloat16` for dtype (config.generation.torch_dtype)
-- Enables CPU offloading by default via `pipe.enable_model_cpu_offload()`
-- Fixed parameters: max_sequence_length=512
-- Falls back to minimal config if config.py unavailable
+**WSL Side (Local Machine)**:
+- Entry point: `flux-generate.sh`
+- Configuration: `config.env` (secrets), `config_defaults.yaml` (parameters)
+- Prompt enhancement: `src/enhance-prompt-claude.py` → Claude API
+- CLIP tokenization: Trims prompts to 77 tokens
+- File management: Downloads images, auto-opens in Windows Photos
 
-**Prompt Enhancement** (`enhance-prompt-claude.py`):
-- Uses centralized logging system (logs to console + `logs/enhance-claude.log`)
-- Calls Claude Sonnet 4.5 with config values (temperature=0.7, max_tokens=120)
-- System prompt loaded from `prompts/claude_system.txt` or config
-- CLIP tokenizer validation:
-  - Logs warning if tokenizer unavailable, uses word-count estimation
-  - Specific exception handling (ImportError vs Exception)
-  - Trims to exactly 77 tokens
-- Error handling:
-  - No silent fallbacks - exits with error code 1 on failure
-  - Logs HTTP error details, network errors, parse errors
-  - Suppresses only specific transformers warnings
-- Uses config.claude.* and config.clip.* values
+**RunPod Side (GPU Server)**:
+- Image generation: `src/generate.py` (executed via SSH)
+- FLUX.1-dev model loading and inference
+- Persistent storage: `/workspace/` (50GB network volume)
+- Model cache: `/workspace/.cache/` (32GB, persists across restarts)
+- Python environment: `/workspace/.venv/` (7.9GB, persists)
 
-**SSH Orchestration** (`flux-generate.sh`):
-- Sources `lib/config.sh` for paths and presets, then `config.env` for secrets
-- Parses extensive CLI flags (resolution, seed, quality, guidance, enhancement)
-- Exports HUGGINGFACE_TOKEN and HF_HOME environment variables to RunPod
-- Activates `/workspace/.venv` Python virtual environment before execution
-- SSH security: `StrictHostKeyChecking=accept-new` (prevents MITM, allows dynamic IPs)
-- Connection timeout: 10 seconds (configurable in lib/config.sh)
-- Builds generate.py command with all parameters (height, width, seed, quality)
-- Uses variables from lib/config.sh:
-  - `${WORKSPACE_PATH}`, `${WORKSPACE_CACHE}`, `${WORKSPACE_SCRIPTS}`, `${WORKSPACE_OUTPUTS}`
-  - `${STEPS_FAST}`, `${STEPS_BALANCED}`, `${STEPS_QUALITY}`
-  - `${GUIDANCE_CREATIVE}`, `${GUIDANCE_DEFAULT}`, `${GUIDANCE_STRICT}`
-- Resolution presets: square, portrait, landscape, HD, 4K, custom
-- Enhanced output display: shows resolution, seed, quality, all parameters
+**Data Flow**:
+```
+User → flux-generate.sh → enhance-prompt-claude.py (Claude API) → trim_to_77()
+  → SSH to RunPod → generate.py (FLUX inference) → /workspace/outputs/
+  → SCP download → WSL → Windows Pictures → Auto-open
+```
 
-### Remote Environment (RunPod)
-- **Base Image**: runpod/pytorch:2.1.1-py3.10-cuda12.1.1-devel-ubuntu22.04
-- **GPU**: RTX 4090 (24GB VRAM minimum)
-- **Storage**:
-  - Container disk: 10GB (ephemeral, resets on pod termination)
-  - Network volume: 50GB (persistent, mounted at /workspace)
-  - Model cache: /workspace/.cache (~32GB for FLUX.1-dev)
-- **Python Environment**: /workspace/.venv (managed by deploy.sh)
-- **Scripts**: /workspace/scripts/generate.py
-- **Outputs**: /workspace/outputs/flux_YYYYMMDD_HHMMSS.jpg
+### Configuration System (Three-Layer Priority)
 
-### Configuration Dependencies
-- **FLUX.1-dev model**: Requires HuggingFace token (gated model)
-- **Prompt enhancement**: Requires Anthropic API key
-- **RunPod connection**: Requires SSH key (~/.ssh/id_ed25519), dynamic IP/port (changes on each pod deployment)
-- **CLIP validation**: Uses openai/clip-vit-large-patch14 tokenizer (77 token hard limit)
+Configuration is resolved in this priority order (highest to lowest):
 
-## Important Technical Details
+1. **CLI flags** → `--quality`, `--seed 12345`, `--portrait`
+2. **Environment variables** → `STEPS_QUALITY=100`
+3. **Config files**:
+   - `config.env` - Secrets (API keys, RunPod connection) **NOT in git**
+   - `config_defaults.yaml` - Tunable parameters (steps, guidance, model config)
+   - `config/lib/config.sh` - Shell script helpers
+4. **Dataclass defaults** - Hardcoded fallbacks in `config/config.py`
 
-### VRAM Optimization
-FLUX.1-dev requires >24GB VRAM in standard mode. The codebase uses:
-- `torch.bfloat16` (NOT float16) for model dtype
-- `pipe.enable_model_cpu_offload()` to dynamically move model components between GPU/CPU
-- Never use `.to('cuda')` directly - CPU offloading handles device placement
-- Lower step counts (4-20) reduce memory pressure vs 50 steps
+**Key Design**: Separation of secrets (`config.env`) from parameters (`config_defaults.yaml`) enables safe git commits.
 
-### CLIP Token Limit
-FLUX models use CLIP text encoder with 77 token hard limit:
-- Prompts exceeding 77 tokens will be truncated by the model
-- `enhance-prompt-claude.py` validates and trims to 77 tokens before generation
-- Token count ≠ word count (punctuation, special characters affect tokenization)
-- Use `test-clip.py` to validate prompt token counts
+### CLIP Token Trimming (Critical for FLUX)
+
+FLUX.1-dev has a **hard 77-token limit** via CLIP tokenizer:
+
+1. `enhance-prompt-claude.py` → Claude API (targets <50 words)
+2. `count_clip_tokens()` → Uses `transformers.CLIPTokenizer` for actual token count
+3. If >77 tokens: `trim_to_77()` → Decodes first 77 tokens, preserving meaning
+4. Fallback: 1.6 word-to-token ratio if tokenizer unavailable
+
+**Why this matters**: Without trimming, FLUX silently truncates at 77 tokens mid-word, corrupting prompts.
 
 ### RunPod Persistence Model
-- **Pod IP/port changes** on every deployment - must update config.env
-- **Network volume persists** across pod terminations (model cache, venv)
-- **Container state is ephemeral** - all critical data must be in /workspace
-- **First deployment**: 10-15 min (downloads 24GB model to volume)
-- **Subsequent deployments**: 30 sec (model already cached)
 
-### Guidance Scale Behavior
-- **1.0-2.0**: Maximum artistic freedom, may diverge from prompt
-- **2.0-4.0**: Balanced (default: 3.5)
-- **4.0-7.0**: Strict adherence to prompt, may reduce image quality
-- FLUX.1-dev performs best at 1.5-3.5 range
+**Critical distinction**:
+- **Container disk**: 10GB, ephemeral, resets on restart
+- **Network volume** (`/workspace/`): 50GB, persistent ($5/month)
 
-## File Structure
+**What persists**:
+- FLUX.1-dev model cache: 32GB in `/workspace/.cache/`
+- Python venv: 7.9GB in `/workspace/.venv/`
+- Generation scripts: `/workspace/scripts/`
 
+**What changes on restart**:
+- RunPod assigns new IP/SSH port → Run `scripts/update-pod-connection.sh` to auto-update `config.env`
+
+## Code Structure Patterns
+
+### Python Scripts (`src/`)
+
+All Python scripts follow this pattern:
+```python
+#!/usr/bin/env python3
+import sys
+from config import config  # Centralized config singleton
+
+def main():
+    try:
+        # Validate inputs
+        if len(sys.argv) < required:
+            print("ERROR: ...", file=sys.stderr)
+            sys.exit(1)
+
+        # Use config.* for all parameters
+        height = config.generation.height
+
+        # CRITICAL: Always flush for SSH streaming
+        print("Status update...", flush=True)
+
+    except Exception as e:
+        # Always stderr for SSH error capture
+        print(f"FATAL ERROR: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
 ```
-/home/rbsmith4/flux-image-generator/
-├── flux-generate.sh              # Main CLI entry point (local)
-├── generate.py                   # FLUX model execution (runs on RunPod)
-├── enhance-prompt-claude.py      # Claude API prompt enhancement
-├── enhance-prompt.py             # Fallback enhancement (no Claude)
-├── upload-script.sh              # Deploy generate.py to RunPod
-├── config.env                    # Credentials and connection config
-├── scripts/
-│   ├── deploy.sh                 # Initial RunPod setup (venv, deps, model download)
-│   ├── generate.sh               # Alternative generation wrapper
-│   ├── download.sh               # Download images from RunPod
-│   └── setup_runpod.sh           # RunPod environment configuration
-├── outputs/                      # Local image storage (WSL)
-└── test-*.py                     # Validation and debugging scripts
+
+**Key patterns**:
+- Use `flush=True` for real-time output over SSH
+- Print errors to `stderr` with prefixes (`ERROR:`, `FATAL ERROR:`)
+- Import config singleton: `from config import config`
+- Always catch exceptions and print traceback for remote debugging
+
+### Shell Scripts
+
+All shell scripts source configuration:
+```bash
+#!/bin/bash
+set -e  # Exit on error
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONFIG_FILE="${SCRIPT_DIR}/../config.env"
+source "$CONFIG_FILE"
+
+# Use printf for consistent formatting
+printf "=== Section ===\n"
+printf "Status: %s\n" "$VARIABLE"
+
+# Always quote variables for spaces
+ssh root@"${RUNPOD_HOST}" -p "${RUNPOD_PORT}" -i "$SSH_KEY" "command"
+
+# Check exit codes explicitly
+SSH_EXIT=$?
+if [ $SSH_EXIT -ne 0 ]; then
+    printf "\nERROR: Failed\n" >&2
+    exit $SSH_EXIT
+fi
 ```
 
-## Common Workflows
+**Key patterns**:
+- Use `set -e` to fail fast
+- Use `printf` instead of `echo` for formatting
+- Always quote: `"${VAR}"` not `$VAR`
+- Source `config.env` for secrets
 
-### First-Time RunPod Setup
-1. Deploy RunPod pod from "FLUX Generator" template (see WORKFLOW.md)
-2. Update config.env with new RUNPOD_HOST and RUNPOD_PORT
-3. Restore HuggingFace token to pod: `ssh root@<IP> -p <PORT> -i ~/.ssh/id_ed25519 "mkdir -p ~/.cache/huggingface && echo '<TOKEN>' > ~/.cache/huggingface/token"`
-4. Run `bash scripts/deploy.sh` (10-15 min for model download)
-5. Test: `bash flux-generate.sh "test prompt" --fast`
+### Configuration Access
 
-### Subsequent Pod Deployments
-1. Deploy pod with same template + existing volume ("flux-storage")
-2. Update config.env with new IP/port
-3. Generate images immediately (model already cached)
-4. Terminate pod when done to stop compute costs
+**From Python**:
+```python
+from config import config
 
-### Modifying Generation Code
-1. Edit generate.py locally
-2. Run `bash upload-script.sh` to deploy to RunPod
-3. Test with `bash flux-generate.sh "test" --fast`
+# Access nested config
+height = config.generation.height
+model = config.claude.model
+cache_path = config.paths.hf_cache
 
-### Debugging Prompt Enhancement
-1. Test locally: `python3 enhance-prompt-claude.py "your prompt"`
-2. Verify token count: `python3 test-clip.py "enhanced prompt output"`
-3. Use `test-enhance-verbose.py` for detailed debugging output
+# Config is immutable after load
+```
+
+**From Shell**:
+```bash
+source "config/lib/config.sh"
+
+# Use predefined variables
+ssh_cmd "${RUNPOD_HOST}" "${RUNPOD_PORT}" "${SSH_KEY}" "ls ${WORKSPACE_PATH}"
+
+# Use presets
+STEPS=${STEPS_QUALITY}  # 50
+```
+
+## Critical Constraints
+
+### VRAM Management
+- FLUX.1-dev requires >24GB VRAM in bfloat16
+- `generate.py` uses `pipe.enable_model_cpu_offload()` to manage memory
+- **Never disable CPU offload** - will OOM on RTX 4090 (24GB)
+- Higher steps (50+) push VRAM limits - reduce if OOM
+
+### Disk Space Management
+- Container disk: Only 10GB - don't write large files
+- Network volume: 50GB - use `/workspace/` for all persistent data
+- Always set `HF_HOME=/workspace/.cache` before HuggingFace ops
+- Check: `du -sh /workspace/.cache`
+
+## Development Workflows
+
+### Adding New Quality Presets
+
+1. Edit `config_defaults.yaml`:
+```yaml
+generation:
+  steps_ultra: 100
+```
+
+2. Edit `config.py` dataclass:
+```python
+@dataclass
+class GenerationConfig:
+    steps_ultra: int = 100
+```
+
+3. Edit `flux-generate.sh` CLI parser:
+```bash
+case $1 in
+    --ultra) STEPS=${STEPS_ULTRA}; shift ;;
+```
+
+### Modifying Prompt Enhancement
+
+System prompt location: `prompts/claude_system.txt` (auto-loaded by `config.py`)
+
+To change:
+1. Edit `prompts/claude_system.txt`
+2. Auto-reloads on next run
+3. No code changes needed
+
+Test: `python3 src/enhance-prompt-claude.py "test prompt"`
+
+### Debugging RunPod Issues
+
+```bash
+# Test connection
+ssh root@${RUNPOD_HOST} -p ${RUNPOD_PORT} -i ${SSH_KEY} "echo OK"
+
+# View disk space
+ssh root@${RUNPOD_HOST} -p ${RUNPOD_PORT} -i ${SSH_KEY} "df -h /workspace"
+
+# Check model cache
+ssh root@${RUNPOD_HOST} -p ${RUNPOD_PORT} -i ${SSH_KEY} "ls -lh /workspace/.cache/"
+```
+
+**Common failures**:
+1. **New IP/port**: Run `bash scripts/update-pod-connection.sh`
+2. **Model not cached**: First gen downloads 23GB (one-time)
+3. **CUDA OOM**: Reduce steps or switch to FLUX.1-schnell
+4. **SSH timeout**: Increase `SSH_CONNECT_TIMEOUT` in `config_defaults.yaml`
+
+## Important Notes
+
+### Windows Path Handling (WSL)
+- WSL: `/mnt/c/Users/.../Pictures/FLUX`
+- Windows: `C:\Users\...\Pictures\FLUX`
+- Use double backslashes: `C:\\Users\\...`
+- Use `powershell.exe` to open files from WSL
+
+### Security
+- `config.env` contains API keys - **NEVER commit**
+- `.gitignore` excludes `config.env`, `*.env`, `*.backup`
+- `.env.example` provides template without secrets
+- SSH keys: `chmod 600 ~/.ssh/id_ed25519`
+
+### Cost Optimization
+- RunPod: ~$0.50/hour (RTX 4090) + $5/month (50GB storage)
+- Stop pod when idle (storage persists)
+- Use `--fast` (4 steps) for quick iterations
