@@ -19,40 +19,66 @@ wsl ssh root@host -p PORT -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no comma
 
 ## Storage Issues
 
-### Container vs Network Volume
+### Critical: Understanding RunPod Storage Architecture
 
-**Container Disk** (`/` filesystem):
-- 10GB temporary storage
-- **RESETS ON POD RESTART**
-- Used for: OS, temporary files
-- Check: `df -h /`
+**Container Root (/) - 10GB Ephemeral**:
+- Temporary overlay filesystem
+- Resets on pod restart
+- Default location for Python packages, OS files
+- DO NOT store models, datasets, or training outputs here
+- Check usage: `df -h | grep overlay`
 
-**Network Volume** (`/workspace`):
-- 50GB persistent storage  
-- **SURVIVES POD RESTARTS**
-- Must contain: Model cache, scripts, outputs
-- Check: `df -h /workspace`
+**Network Volume (/workspace) - Persistent**:
+- Survives pod restarts and terminations
+- Persists across different pod deployments
+- Should contain: models, datasets, outputs, cache
+- Check usage: `df -h | grep workspace`
+
+### The Cache Symlink Problem (Most Common Failure)
+
+By default, HuggingFace downloads to `~/.cache` which maps to `/root/.cache` on the container root.
+
+**What happens without symlink**:
+1. Training starts
+2. HuggingFace downloads FLUX model (32GB) to `/root/.cache`
+3. Container root fills to 100% (10GB limit)
+4. Training fails with "No space left on device"
+5. All cache is lost on pod restart
+
+**Solution (MUST do before any training)**:
+```bash
+# Remove existing container cache if any
+rm -rf /root/.cache
+
+# Create symlink to network volume
+ln -sfn /workspace/.cache /root/.cache
+
+# Verify symlink exists
+ls -lah /root/ | grep cache
+# Should show: lrwxrwxrwx 1 root root 17 ... .cache -> /workspace/.cache
+
+# Check container disk (should be <10% after symlink)
+df -h | grep overlay
+```
 
 ### Model Cache Locations
 
-**WRONG** (container, gets deleted):
+**Wrong (container, gets deleted)**:
 ```
 /root/.cache/huggingface/
+~/.cache/huggingface/
 ```
 
-**RIGHT** (network volume, persists):
+**Right (network volume, persists)**:
 ```
-/workspace/.cache/hub/
+/workspace/.cache/huggingface/
 ```
 
-**How to Fix**:
+**Environment Variables to Set**:
 ```bash
-# Set HF_HOME in pod's .bashrc
-echo 'export HF_HOME=/workspace/.cache' >> ~/.bashrc
-source ~/.bashrc
-
-# Verify in SSH command
-export HF_HOME='/workspace/.cache'
+export HF_HOME=/workspace/.cache/huggingface
+export TRANSFORMERS_CACHE=/workspace/.cache/huggingface
+export TMPDIR=/workspace/tmp
 ```
 
 ### Disk Full Errors
@@ -82,51 +108,74 @@ ls -t | tail -n +6 | xargs rm -f
 
 ## CUDA/GPU Issues
 
+### Training Using CPU Instead of GPU
+
+**Symptom**: Training runs but `nvidia-smi` shows 0% GPU utilization
+
+**Cause**: Missing `CUDA_VISIBLE_DEVICES` environment variable or PyTorch not detecting GPU
+
+**Diagnosis**:
+```bash
+# Check if CUDA is available
+cd /workspace/ai-toolkit && source venv/bin/activate
+python -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}'); print(f'Device count: {torch.cuda.device_count()}')"
+
+# Check GPU during training
+nvidia-smi
+# Look for python processes in GPU memory column
+```
+
+**Fix**:
+```bash
+# Always set these environment variables before training
+export CUDA_VISIBLE_DEVICES=0
+export HF_HOME=/workspace/.cache/huggingface
+export TMPDIR=/workspace/tmp
+export TRANSFORMERS_CACHE=/workspace/.cache/huggingface
+
+# Then start training
+cd /workspace/ai-toolkit && source venv/bin/activate
+python run.py config/your_config.yaml
+```
+
 ### Out of Memory
 
 **Error**:
 ```
-OutOfMemoryError: CUDA out of memory. Tried to allocate 72.00 MiB. 
+OutOfMemoryError: CUDA out of memory. Tried to allocate 72.00 MiB.
 GPU 0 has a total capacity of 23.52 GiB of which 7.75 MiB is free.
 ```
 
-**Cause**: FLUX.1-dev needs >24GB VRAM, RTX 4090 has exactly 24GB
+**Cause**: FLUX.1-dev needs >24GB VRAM for training
 
 **Solutions**:
-
-1. **CPU Offloading** (already in generate.py):
-```python
-pipe.enable_model_cpu_offload()
-```
-
-2. **Reduce steps**:
-```bash
-bash flux-generate.sh "prompt" --fast  # 4 steps
-bash flux-generate.sh "prompt" --balanced  # 20 steps
-```
-
-3. **Use quantized model** (future):
-```
-FLUX.1-dev-fp8  # 8-bit quantized, fits in 16GB
-```
+1. Use quantization (enabled in config: `quantize: true`)
+2. Reduce batch size to 1
+3. Use gradient accumulation instead of larger batches
+4. Use A100 80GB GPU instead of smaller GPUs
 
 ### Check GPU Status
 ```bash
 nvidia-smi
+
+# Or for continuous monitoring
+watch -n 1 nvidia-smi
 ```
 
-Should show:
-- GPU: NVIDIA GeForce RTX 4090
-- Memory: 24564 MiB total
-- Processes: None when idle
+Expected during training:
+- GPU utilization: 90-100%
+- Memory used: 20-30GB for A100 80GB with quantization
+- Temperature: 40-60C
+- Processes: python (AI-Toolkit training)
 
 ### Clear GPU Memory
 ```bash
-# Kill Python processes
+# Kill all Python training processes
 pkill -9 python
 
-# Check again
+# Verify GPU cleared
 nvidia-smi
+# Should show 0 MB used
 ```
 
 ## Generation Failures

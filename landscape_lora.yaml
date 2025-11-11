@@ -1,0 +1,65 @@
+---
+job: extension
+config:
+  name: landscape_lora_v1
+  process:
+    - type: sd_trainer
+      training_folder: /workspace/training/output
+
+      # Device settings
+      device: cuda:0
+
+      # Model configuration
+      model:
+        name_or_path: black-forest-labs/FLUX.1-dev
+        is_flux: true
+        quantize: true  # Enable for 80GB VRAM efficiency
+
+      # Network (LoRA) settings
+      network:
+        type: lora
+        linear: 16  # LoRA rank
+        linear_alpha: 16
+
+      # Dataset configuration
+      datasets:
+        - folder_path: /workspace/datasets/landscapes
+          caption_ext: txt
+          caption_type: filename  # Uses matching .txt files
+          resolution: [512, 768, 1024]  # Multi-resolution training
+          batch_size: 1
+
+      # Training parameters
+      train:
+        steps: 2000  # Adjust based on dataset size (1000 images = ~2000 steps)
+        gradient_accumulation_steps: 4
+        train_unet: true
+        train_text_encoder: false
+        learning_rate: 1e-4
+        lr_scheduler: constant
+
+        # Optimizer settings
+        optimizer: adamw8bit
+
+        # Checkpointing
+        save_every: 500  # Save checkpoint every 500 steps
+        sample_every: 250  # Generate sample images every 250 steps
+
+        # Sample prompts for progress monitoring
+        sample_prompts:
+          - "A breathtaking mountain landscape at golden hour with dramatic clouds"
+          - "Misty forest valley with ethereal morning fog and soft sunlight"
+          - "Serene coastal scene at twilight with gentle waves and purple sky"
+          - "Rolling hills covered in wildflowers under a clear blue sky"
+
+      # Saving
+      save:
+        dtype: float16
+        save_every: 500
+        max_step_saves_to_keep: 3
+
+# Meta information
+meta:
+  name: Landscape LoRA Training
+  version: '1.0'
+  description: 'Training Flux LoRA on 1000 high-quality landscape images with detailed captions'

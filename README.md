@@ -1,222 +1,372 @@
-# FLUX Image Generator
+# FLUX LoRA Trainer
 
-Automated FLUX.1-dev image generation using RunPod GPU instances with Claude API prompt enhancement.
+Train custom LoRA adapters for FLUX.1-dev using AI-Toolkit on RunPod GPU instances. Fine-tune the model for specific styles, subjects, or concepts using your own training images.
 
 ## Features
 
-- **AI-Enhanced Prompts**: Claude API automatically expands short prompts into detailed, high-quality descriptions
-- **Resolution Presets**: Square, Portrait, Landscape, HD, 4K, or custom dimensions
-- **Seed Control**: Random seeds by default, or specify for reproducible results
-- **Guidance Scale Control**: Adjust creativity vs prompt adherence (1.0-7.0)
-- **Quality Presets**: Fast (4 steps), Balanced (20 steps), Quality (50 steps)
-- **JPEG Quality Control**: Configurable output quality (1-100)
-- **Centralized Configuration**: YAML-based config with environment variable support
-- **Comprehensive Logging**: Detailed logs for debugging and monitoring
-- **Automated Workflow**: Generate → Download → Auto-open in Windows
-- **Persistent Storage**: 50GB network volume caches model permanently
+- **AI-Toolkit by Ostris**: Modern LoRA training framework optimized for FLUX models
+- **FLUX.1-dev Support**: Native support for Black Forest Labs' FLUX.1-dev with quantization
+- **RunPod Integration**: Remote training on A100 80GB GPUs via SSH
+- **Network Volume Storage**: Persistent storage for models, datasets, and outputs
+- **YAML Configuration**: Clean, version-controlled training configs
+- **Multi-Resolution Training**: Automatic bucketing for [512, 768, 1024] resolutions
 
-## Quick Usage
+## Quick Start
+
+### Prerequisites
+
+- RunPod account with credit
+- HuggingFace account with FLUX.1-dev access
+- WSL/Linux/Mac with SSH
+- Training dataset (100-1000+ images with captions)
+
+### Critical First Step: Configure Storage
+
+Before any training, set up cache symlink to avoid filling container storage:
+
+```bash
+ssh -p <PORT> -i ~/.ssh/id_ed25519 root@<IP>
+rm -rf /root/.cache
+ln -sfn /workspace/.cache /root/.cache
+ls -lah /root/ | grep cache  # verify symlink exists
+```
+
+This prevents downloads from filling the 10GB container root.
+
+### 1. Update Connection Info
+
+After deploying RunPod pod, update connection details in `config.env`:
 
 ```bash
 cd ~/flux-image-generator
-
-# Generate with AI-enhanced prompt and creative guidance
-bash flux-generate.sh "sunset over mountains" --quality --enhance-ai --creative
-
-# Portrait photo with specific seed (reproducible)
-bash flux-generate.sh "portrait photo" --balanced --portrait --seed 12345
-
-# 4K landscape with custom quality
-bash flux-generate.sh "mountain vista" --4k --quality --jpeg-quality 100
-
-# Custom resolution
-bash flux-generate.sh "logo design" --custom 512x512 --fast
-
-# Get help
-bash flux-generate.sh --help
-```
-
-## Command Line Flags
-
-### Quality Presets
-- `--fast` - 4 steps (~10-15 seconds)
-- `--balanced` - 20 steps (~30-45 seconds)
-- `--quality` - 50 steps (~1-2 minutes) **[RECOMMENDED]**
-
-### Resolution Presets
-- `--square` - 1024x1024 (default)
-- `--portrait` - 768x1024 (3:4 aspect ratio)
-- `--landscape` - 1024x768 (4:3 aspect ratio)
-- `--hd` - 1280x720 (16:9 HD)
-- `--4k` - 3840x2160 (16:9 4K)
-- `--custom WxH` - Custom resolution (e.g., `--custom 1920x1080`)
-
-### Seed Control
-- `--seed N` - Use specific seed for reproducibility
-- `--random-seed` - Use random seed (default)
-
-### Guidance Scale
-- `--creative` - guidance=1.5 (more artistic freedom)
-- `--guidance X` - Custom value 1.0-7.0 (default: 3.5)
-- `--strict` - guidance=5.0 (strict prompt adherence)
-
-### Other Options
-- `--enhance-ai` - Use Claude API to enhance prompt
-- `--jpeg-quality N` - JPEG quality 1-100 (default: 95)
-- `--help` - Show detailed help message
-
-## Setup
-
-### 1. Install Dependencies (WSL Ubuntu)
-```bash
-sudo apt update
-sudo apt install python3 python3-pip
-pip3 install -r requirements.txt
-```
-
-### 2. Configure Secrets
-
-Copy the example configuration and fill in your values:
-```bash
-cp .env.example config.env
 nano config.env
 ```
 
-Required values in `config.env`:
+Update:
 ```bash
-# API Keys
-ANTHROPIC_API_KEY=your_anthropic_key_here
-HUGGINGFACE_TOKEN=your_hf_token_here
-
-# RunPod Connection (update after each deployment)
-RUNPOD_HOST=your.runpod.ip
-RUNPOD_PORT=12345
-SSH_KEY=~/.ssh/id_ed25519
-
-# Local Output Directories
-WINDOWS_USERNAME=your_username
-OUTPUT_DIR_WSL=/mnt/c/Users/${WINDOWS_USERNAME}/Pictures/FLUX
-OUTPUT_DIR_WINDOWS=C:\Users\${WINDOWS_USERNAME}\Pictures\FLUX
+RUNPOD_HOST=<your_pod_ip>
+RUNPOD_PORT=<your_pod_port>
+HUGGINGFACE_TOKEN=<your_hf_token>
 ```
 
-**Note**: All other configuration (quality presets, resolution defaults, etc.) is in `config_defaults.yaml`. See [CONFIGURATION.md](CONFIGURATION.md) for details.
+### 2. Verify Setup
 
-### 3. Setup RunPod (First Time)
+Before training, verify all resources are in place:
 
-1. **Deploy Pod**:
-   - Template: `runpod/pytorch:2.1.1-py3.10-cuda12.1.1-devel-ubuntu22.04`
-   - GPU: A100 80GB (or 24GB+ VRAM)
-   - Network Volume: 50GB ($5/month)
-   - Mount path: `/workspace`
-
-2. **Upload Script**:
 ```bash
-bash upload-script.sh
+ssh -p <PORT> -i ~/.ssh/id_ed25519 root@<IP>
+
+# Check dataset exists
+ls /workspace/datasets/landscapes/*.jpg | wc -l
+
+# Check FLUX model cached (should show ~32GB)
+du -sh /workspace/.cache/huggingface/hub/models--black-forest-labs--FLUX.1-dev
+
+# Verify AI-Toolkit installation
+ls /workspace/ai-toolkit/run.py
+
+# Check PyTorch/CUDA
+cd /workspace/ai-toolkit && source venv/bin/activate
+python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}'); print(f'GPU: {torch.cuda.get_device_name(0)}')"
 ```
 
-3. **Set Cache Location** (SSH to pod):
+### 3. HuggingFace Authentication
+
+FLUX.1-dev is a gated model requiring authentication:
+
 ```bash
-echo 'export HF_HOME=/workspace/.cache' >> ~/.bashrc
-source ~/.bashrc
+cd /workspace/ai-toolkit && source venv/bin/activate
+huggingface-cli login --token <your_hf_token>
 ```
 
-Model will download once (~23GB) on first generation.
+Token is saved to `/workspace/.cache/huggingface/token` (persists on network volume).
 
-## Restarting After Shutdown
+### 4. Create Training Configuration
 
-1. **Update config.env** with new pod IP/port:
-```bash
-nano ~/flux-image-generator/config.env
-# Update RUNPOD_HOST and RUNPOD_PORT
+Edit or create YAML config in `/workspace/ai-toolkit/config/<your_config>.yaml`:
+
+```yaml
+job: extension
+config:
+  name: my_lora
+  process:
+    - type: sd_trainer
+      training_folder: /workspace/training/output
+      device: cuda:0
+
+      model:
+        name_or_path: black-forest-labs/FLUX.1-dev
+        is_flux: true
+        quantize: true
+
+      network:
+        type: lora
+        linear: 16
+        linear_alpha: 16
+
+      datasets:
+        - folder_path: /workspace/datasets/my_dataset
+          caption_ext: txt
+          caption_type: filename
+          resolution: [512, 768, 1024]
+          batch_size: 1
+
+      train:
+        steps: 2000
+        gradient_accumulation_steps: 4
+        train_unet: true
+        train_text_encoder: false
+        learning_rate: 1e-4
+        lr_scheduler: constant
+        optimizer: adamw8bit
+        save_every: 500
+        sample_every: 250
+
+      save:
+        dtype: float16
+        save_every: 500
+        max_step_saves_to_keep: 3
 ```
 
-2. **Test connection**:
+### 5. Run Training
+
+With proper environment variables for GPU and cache:
+
 ```bash
-ssh root@<NEW_IP> -p <NEW_PORT> -i ~/.ssh/id_ed25519
+cd /workspace/ai-toolkit && source venv/bin/activate
+export CUDA_VISIBLE_DEVICES=0
+export HF_HOME=/workspace/.cache/huggingface
+export TMPDIR=/workspace/tmp
+export TRANSFORMERS_CACHE=/workspace/.cache/huggingface
+python run.py config/<your_config>.yaml 2>&1 | tee /workspace/training_output.log
 ```
 
-3. **Everything else persists** on network volume:
-   - Model cache (32GB)
-   - Python environment (7.9GB)
-   - Scripts
+Monitor in another terminal:
+```bash
+ssh -p <PORT> -i ~/.ssh/id_ed25519 root@<IP> "tail -f /workspace/training_output.log"
+```
 
-## Known Issues
-
-### CUDA Out of Memory
-**Error**: `OutOfMemoryError: CUDA out of memory`
-
-**Cause**: FLUX.1-dev needs >24GB VRAM in bfloat16
-
-**Solutions**:
-1. Use CPU offloading (already enabled in generate.py)
-2. Reduce to 4-20 steps instead of 50
-3. Switch to FLUX.1-schnell (faster, lower quality)
-
-### Disk Space
-- Container disk: 10GB (temporary, resets on restart)
-- Network volume: 50GB (persistent)
-- Model must be in `/workspace/.cache` (network volume)
-- Check: `du -sh /workspace/.cache`
+Check GPU utilization:
+```bash
+ssh -p <PORT> -i ~/.ssh/id_ed25519 root@<IP> nvidia-smi
+```
 
 ## Project Structure
 
 ```
-~/flux-image-generator/
-├── flux-generate.sh              # Main generation script
-├── requirements.txt              # Python dependencies
-├── config.env                    # Secrets (API keys, tokens) - NOT IN GIT
-├── .env.example                  # Template for config.env
-├── .gitignore                    # Git exclusions
-│
-├── config/                       # Configuration
-│   ├── config.py                 # Python configuration system
-│   ├── config_defaults.yaml      # Default configuration values
-│   └── lib/
-│       └── config.sh             # Shared shell configuration
-│
-├── src/                          # Source code
-│   ├── generate.py               # RunPod generation script
-│   ├── enhance-prompt-claude.py  # Claude API prompt enhancement
-│   └── logger.py                 # Centralized logging
-│
-├── scripts/                      # Deployment scripts
-│   ├── upload-script.sh          # Upload to RunPod
-│   ├── setup_runpod.sh           # RunPod setup
-│   ├── deploy.sh                 # Deployment helper
-│   ├── download.sh               # Download helper
-│   └── generate.sh               # Generation wrapper
-│
-├── prompts/                      # Prompt templates
-│   └── claude_system.txt         # Claude system prompt
-│
-├── docs/                         # Additional documentation
-│   ├── QUICKSTART.md             # Detailed setup guide
-│   ├── WORKFLOW.md               # Usage workflows
-│   ├── TROUBLESHOOTING.md        # Common issues
-│   └── archive/                  # Archived development docs
-│
-├── outputs/                      # Generated images
-└── logs/                         # Log files
+~/flux-image-generator/              # WSL local repo
+├── config.env                       # Connection config (not in git)
+├── landscape_lora.yaml              # Training config examples
+└── README.md                        # This file
+
+/workspace/                          # RunPod network volume (persistent)
+├── .cache/                          # HuggingFace cache
+│   └── huggingface/
+│       ├── hub/
+│       │   └── models--black-forest-labs--FLUX.1-dev/  # 32GB model cache
+│       └── token                    # HuggingFace auth token
+├── ai-toolkit/                      # AI-Toolkit installation
+│   ├── run.py                       # Main training script
+│   ├── config/                      # Training configurations
+│   │   ├── landscape_lora.yaml
+│   │   └── test_run.yaml
+│   └── venv/                        # Python environment
+├── datasets/                        # Training datasets
+│   └── landscapes/                  # Example: 1000 landscape images
+│       ├── image_001.jpg
+│       ├── image_001.txt            # Caption for image_001.jpg
+│       └── ...
+└── training/                        # Training outputs
+    └── output/
+        └── my_lora/
+            ├── my_lora.safetensors            # Final LoRA weights
+            ├── my_lora_000000500.safetensors  # Checkpoint at step 500
+            └── optimizer.pt                   # Optimizer state
+
+Container Root (/)                   # 10GB ephemeral, resets on restart
+└── root/
+    └── .cache -> /workspace/.cache  # Symlink to network volume (critical!)
 ```
 
 ## Configuration
 
-See [CONFIGURATION.md](CONFIGURATION.md) for detailed configuration options.
+### RunPod Setup
 
-**Quick reference**:
-- Secrets: `config.env` (API keys, RunPod connection)
-- Settings: `config_defaults.yaml` (quality presets, defaults)
-- Paths: `lib/config.sh` (RunPod paths, SSH settings)
+**GPU Requirements**:
+- Minimum: 24GB VRAM (RTX 4090, A5000)
+- Recommended: A100 80GB for batch training
+- Storage: 50GB network volume
 
-## Costs
-
+**Cost**:
 - **Compute**: ~$1.89/hour (A100 80GB on-demand)
 - **Storage**: $5/month (50GB network volume)
-- **Typical session**: 1-2 hours = ~$3-4
+- **Typical training**: 1-3 hours = ~$2-6 per LoRA
+
+### Training Settings
+
+**Resolution**:
+- 512x512: Fast training, lower quality
+- 1024x1024: Standard, best quality/speed balance
+- 1024x1536: High quality portraits/art
+
+**Batch Size**:
+- 1024x1024: batch_size=4
+- 1024x1536: batch_size=2
+- 512x512: batch_size=8+
+
+**Steps**:
+- Small dataset (50-100 images): 1000-1500 steps
+- Medium dataset (100-300 images): 1500-2500 steps
+- Large dataset (300+ images): 2000-4000 steps
+
+## Common Issues and Solutions
+
+### Critical: Container Storage Full
+
+**Symptom**: "No space left on device" error during training
+
+**Cause**: HuggingFace downloads to `/root/.cache` (10GB container) instead of `/workspace/.cache` (network volume)
+
+**Fix**:
+```bash
+# Kill training process first
+pkill -9 python
+
+# Remove container cache
+rm -rf /root/.cache
+
+# Create symlink to network volume
+ln -sfn /workspace/.cache /root/.cache
+
+# Verify symlink
+ls -lah /root/ | grep cache
+
+# Check container disk space (should be <10% now)
+df -h | grep overlay
+
+# Re-authenticate to HuggingFace
+cd /workspace/ai-toolkit && source venv/bin/activate
+huggingface-cli login --token <your_hf_token>
+```
+
+**Prevention**: Always create the cache symlink BEFORE starting any training or model downloads.
+
+### Training Using CPU Instead of GPU
+
+**Symptom**: Training runs but GPU utilization shows 0% in `nvidia-smi`
+
+**Cause**: Missing `CUDA_VISIBLE_DEVICES` environment variable
+
+**Fix**: Always export GPU environment variables before training:
+```bash
+export CUDA_VISIBLE_DEVICES=0
+export HF_HOME=/workspace/.cache/huggingface
+export TMPDIR=/workspace/tmp
+export TRANSFORMERS_CACHE=/workspace/.cache/huggingface
+```
+
+### 401 Unauthorized Error
+
+**Symptom**: `GatedRepoError: 401 Client Error` when loading FLUX model
+
+**Cause**: Missing or invalid HuggingFace token
+
+**Fix**:
+```bash
+cd /workspace/ai-toolkit && source venv/bin/activate
+huggingface-cli login --token <your_hf_token>
+```
+
+Token is saved to `/workspace/.cache/huggingface/token` and persists on network volume.
+
+### Model Re-downloading Every Time
+
+**Symptom**: FLUX model downloads again (32GB) even though it exists
+
+**Cause**: `HF_HOME` not set or cache symlink missing
+
+**Fix**:
+```bash
+# Verify cache exists
+du -sh /workspace/.cache/huggingface/hub/models--black-forest-labs--FLUX.1-dev
+
+# Verify symlink exists
+ls -lah /root/.cache
+
+# If symlink missing, create it
+ln -sfn /workspace/.cache /root/.cache
+
+# Always export HF_HOME before training
+export HF_HOME=/workspace/.cache/huggingface
+```
+
+### Background Processes from Old Pods
+
+**Symptom**: Many orphaned bash/python processes running
+
+**Cause**: Previous sessions left processes running on old pod IPs
+
+**Fix**:
+```bash
+# Check for old processes
+ps aux | grep python
+
+# Kill all Python processes
+pkill -9 python
+
+# Or kill all background bash shells
+pkill -9 bash
+```
+
+## Deployment Checklist for New Pod
+
+When deploying a new RunPod pod, follow this exact order:
+
+1. **Deploy pod** and wait for SSH to be ready
+2. **Update config.env** with new IP/port from RunPod dashboard
+3. **Configure storage FIRST**:
+   ```bash
+   ssh -p <PORT> -i ~/.ssh/id_ed25519 root@<IP>
+   rm -rf /root/.cache
+   ln -sfn /workspace/.cache /root/.cache
+   ```
+4. **Verify network volume contents**:
+   - Dataset: `ls /workspace/datasets/<your_dataset>/*.jpg | wc -l`
+   - FLUX model: `du -sh /workspace/.cache/huggingface/hub/models--black-forest-labs--FLUX.1-dev`
+   - AI-Toolkit: `ls /workspace/ai-toolkit/run.py`
+5. **HuggingFace authentication**:
+   ```bash
+   cd /workspace/ai-toolkit && source venv/bin/activate
+   huggingface-cli login --token <your_hf_token>
+   ```
+6. **Verify CUDA**:
+   ```bash
+   python -c "import torch; print(torch.cuda.is_available())"
+   nvidia-smi
+   ```
+7. **Now you can start training**
+
+Skip steps 3-6 at your own risk. The container storage will fill up and training will fail.
 
 ## Output
 
-Images saved to:
-- WSL: `~/flux-image-generator/outputs/`
-- Windows: `C:\Users\rbsmi\Pictures\FLUX\`
-- Filename: `flux_YYYYMMDD_HHMMSS.jpg`
+Trained LoRAs are saved to `/workspace/training/output/<lora_name>/`:
+
+```bash
+# List all trained LoRAs
+ssh -p <PORT> -i ~/.ssh/id_ed25519 root@<IP> "ls -lh /workspace/training/output/"
+
+# Download specific LoRA
+scp -P <PORT> -i ~/.ssh/id_ed25519 root@<IP>:/workspace/training/output/my_lora/my_lora.safetensors ~/Downloads/
+
+# Download all checkpoints for a LoRA
+scp -P <PORT> -i ~/.ssh/id_ed25519 root@<IP>:/workspace/training/output/my_lora/*.safetensors ~/Downloads/
+```
+
+Use with ComfyUI, AUTOMATIC1111, or any FLUX-compatible interface.
+
+## Documentation
+
+- [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) - Common issues and fixes
+- [AI-Toolkit Documentation](https://github.com/ostris/ai-toolkit) - Full AI-Toolkit docs
+- [FLUX Training Guide](https://civitai.com/articles/6776) - Community training tips
